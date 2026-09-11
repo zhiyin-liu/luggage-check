@@ -171,7 +171,14 @@
         <div id="rosterList"></div>
       </div>
       <div class="tabpanel" id="panel-schedule">
-        <div class="field-label">対象日（出勤する日）</div>
+        <div class="field-label">スプレッドシートで一括管理</div>
+        <div class="hint">日付・氏名・出勤時刻・退勤時刻を表に直接まとめて入力できます。新しい氏名を書くと自動でスタッフ登録もされます。</div>
+        <div class="btnrow">
+          <button class="btn ghost" id="openShiftSheetBtn">📄 シフト表を開く/作成</button>
+          <button class="btn primary" id="importShiftSheetBtn">↓ 表の内容を読み込む</button>
+        </div>
+        <div class="hint" id="shiftSheetLink"></div>
+        <div class="field-label" style="margin-top:22px;border-top:1px solid var(--line);padding-top:18px;">またはこの画面で1日ずつ手入力</div>
         <input type="date" id="scheduleDate">
         <div class="hint">夜勤で退勤時刻が出勤時刻より早い場合、自動的に「翌日退勤」として扱われます。</div>
         <div class="field-label">この日に出勤予定のスタッフと時刻</div>
@@ -179,7 +186,13 @@
         <div class="btnrow"><button class="btn primary" id="saveScheduleBtn">この日の予定を保存</button></div>
       </div>
       <div class="tabpanel" id="panel-log">
-        <div class="field-label">期間で絞り込み（空欄で全期間）</div>
+        <div class="field-label">打刻ログのスプレッドシート（リアルタイム記録）</div>
+        <div class="hint">打刻するたびに自動で1行追加されます。開いたまま眺めていれば最新の打刻がそのまま見えます。期間を絞った出力は、シート上でフィルタしてから「ファイル→ダウンロード」でExcel/CSVにできます。</div>
+        <div class="btnrow">
+          <button class="btn ghost" id="openLogSheetBtn">📄 打刻ログ表を開く/作成</button>
+        </div>
+        <div class="hint" id="logSheetLink"></div>
+        <div class="field-label" style="margin-top:22px;border-top:1px solid var(--line);padding-top:18px;">またはアプリ内から直接ダウンロード</div>
         <div style="display:flex;gap:8px;">
           <input type="date" id="logFrom"><input type="date" id="logTo">
         </div>
@@ -188,7 +201,7 @@
           <button class="btn primary" id="exportCsvBtn">CSVダウンロード</button>
         </div>
         <table class="logtbl" id="logTable"><thead><tr><th>日付</th><th>氏名</th><th>区分</th><th>時刻</th></tr></thead><tbody></tbody></table>
-        <div class="note">データはこのGoogleアカウントのDriveアプリ専用領域に保存されています。同じアカウントでログインした端末はすべて同じデータを見られます。</div>
+        <div class="note">出退勤の状態そのものはこのGoogleアカウントのDriveアプリ専用領域に保存され、記録はスプレッドシートにも複製されます。同じアカウントでログインした端末はすべて同じデータを見られます。</div>
       </div>
     </div>
   </div>
@@ -200,11 +213,13 @@
 /* =========================================================
    ▼▼▼ ここを自分の Client ID に置き換えてください ▼▼▼
    ========================================================= */
-   const CLIENT_ID = "50612495188-au2u0mrk216osru7jnvbi3jvvi5gn15l.apps.googleusercontent.com";
+const CLIENT_ID = "50612495188-au2u0mrk216osru7jnvbi3jvvi5gn15l.apps.googleusercontent.com";
 /* ========================================================= */
 
-const SCOPES = "https://www.googleapis.com/auth/drive.appdata";
+const SCOPES = "https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/spreadsheets";
 const FILE_NAME = "luggage_check_data.json";
+const SHIFT_SHEET_TITLE = "手荷物検査_シフト表";
+const LOG_SHEET_TITLE = "手荷物検査_打刻ログ";
 
 let accessToken = null;
 let fileId = null;
@@ -327,7 +342,7 @@ async function ensureFile(){
   const today = fmtDate(new Date());
   const shiftsToday = {};
   seedStaff.forEach(s=> shiftsToday[s.id] = {arrival:"09:00", departure:"18:00"});
-  const initial = { staff: seedStaff, shifts:{ [today]: shiftsToday }, status:{}, log:[] };
+  const initial = { staff: seedStaff, shifts:{ [today]: shiftsToday }, status:{}, log:[], sheetIds:{} };
   const metadata = { name: FILE_NAME, parents:["appDataFolder"], mimeType:"application/json" };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], {type:"application/json"}));
@@ -345,6 +360,7 @@ async function loadFromDrive(){
   if(!appData.shifts) appData.shifts={};
   if(!appData.status) appData.status={};
   if(!appData.log) appData.log=[];
+  if(!appData.sheetIds) appData.sheetIds={};
 }
 
 async function saveToDrive(){
@@ -360,6 +376,102 @@ async function saveToDrive(){
     console.error(e);
     toast("保存に失敗しました。通信状態をご確認ください。");
   }
+}
+
+/* ---------- Google Sheets integration ---------- */
+async function ensureShiftSheet(){
+  if(appData.sheetIds.shiftSheetId){ return appData.sheetIds.shiftSheetId; }
+  const body = {
+    properties:{ title: SHIFT_SHEET_TITLE },
+    sheets:[{ properties:{ title:"シフト" }, data:[{ startRow:0, startColumn:0,
+      rowData:[{ values:[
+        {userEnteredValue:{stringValue:"日付(YYYY-MM-DD)"}},
+        {userEnteredValue:{stringValue:"氏名"}},
+        {userEnteredValue:{stringValue:"出勤時刻(HH:MM)"}},
+        {userEnteredValue:{stringValue:"退勤時刻(HH:MM)"}}
+      ]}]
+    }] }]
+  };
+  const res = await driveFetch("https://sheets.googleapis.com/v4/spreadsheets", {
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const created = await res.json();
+  appData.sheetIds.shiftSheetId = created.spreadsheetId;
+  await saveToDrive();
+  return created.spreadsheetId;
+}
+
+async function ensureLogSheet(){
+  if(appData.sheetIds.logSheetId){ return appData.sheetIds.logSheetId; }
+  const body = {
+    properties:{ title: LOG_SHEET_TITLE },
+    sheets:[{ properties:{ title:"ログ" }, data:[{ startRow:0, startColumn:0,
+      rowData:[{ values:[
+        {userEnteredValue:{stringValue:"日付"}},
+        {userEnteredValue:{stringValue:"氏名"}},
+        {userEnteredValue:{stringValue:"区分"}},
+        {userEnteredValue:{stringValue:"時刻"}}
+      ]}]
+    }] }]
+  };
+  const res = await driveFetch("https://sheets.googleapis.com/v4/spreadsheets", {
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body)
+  });
+  const created = await res.json();
+  appData.sheetIds.logSheetId = created.spreadsheetId;
+  await saveToDrive();
+  return created.spreadsheetId;
+}
+
+function sheetUrl(id){ return `https://docs.google.com/spreadsheets/d/${id}/edit`; }
+
+async function appendLogRowToSheet(entry){
+  try{
+    const id = await ensureLogSheet();
+    const actionJp = entry.action==="arrival"?"出勤チェック":entry.action==="departure"?"退勤チェック":"リセット";
+    await driveFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/ログ!A:D:append?valueInputOption=RAW`, {
+      method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ values:[[entry.date, entry.name, actionJp, entry.timestamp.split(" ")[1]]] })
+    });
+  }catch(e){
+    console.error("log sheet append failed", e);
+    // non-fatal: internal log (appData.log) already recorded this event
+  }
+}
+
+async function importShiftsFromSheet(){
+  const id = await ensureShiftSheet();
+  const res = await driveFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent("シフト!A2:D10000")}`);
+  const data = await res.json();
+  const rows = (data.values || []).filter(r=> r[0] && r[1]);
+  if(rows.length === 0){ toast("表に読み込めるデータがありませんでした"); return; }
+
+  const nameToId = {};
+  appData.staff.forEach(s=> nameToId[s.name] = s.id);
+
+  const touchedDates = new Set();
+  rows.forEach(r=>{ if(/^\d{4}-\d{2}-\d{2}$/.test(r[0])) touchedDates.add(r[0]); });
+  touchedDates.forEach(d=> appData.shifts[d] = {});
+
+  let addedStaff = 0;
+  rows.forEach(r=>{
+    const [dateStr, name, arr, dep] = r;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
+    if(!/^\d{1,2}:\d{2}$/.test(arr||"") || !/^\d{1,2}:\d{2}$/.test(dep||"")) return;
+    let staffId = nameToId[name];
+    if(!staffId){
+      staffId = "s"+Date.now()+Math.floor(Math.random()*1000);
+      appData.staff.push({ id: staffId, name });
+      nameToId[name] = staffId;
+      addedStaff++;
+    }
+    appData.shifts[dateStr][staffId] = { arrival: arr.length===4?"0"+arr:arr, departure: dep.length===4?"0"+dep:dep };
+  });
+
+  await saveToDrive();
+  toast(`読み込み完了：${touchedDates.size}日分、${rows.length}件（新規スタッフ${addedStaff}名）`);
+  renderAll();
+  renderRosterList();
 }
 
 /* ---------- date bar ---------- */
@@ -511,9 +623,11 @@ async function setStatus(shift, field){
   const ts = nowFull();
   appData.status[date][id][field] = ts;
   const person = appData.staff.find(s=>s.id===id);
-  appData.log.push({ date, staffId:id, name: person?person.name:id, action:field, timestamp: ts });
+  const entry = { date, staffId:id, name: person?person.name:id, action:field, timestamp: ts };
+  appData.log.push(entry);
   renderAll();
   await saveToDrive();
+  appendLogRowToSheet(entry); // fire-and-forget, doesn't block the UI
   renderAll();
 }
 
@@ -529,9 +643,11 @@ function openDetail(shift, name, st){
   document.getElementById("resetBtn").onclick = async ()=>{
     if(confirm(`${name} さんの ${shift.anchorDate} の記録をリセットしますか？`)){
       delete appData.status[shift.anchorDate][shift.staffId];
-      appData.log.push({date:shift.anchorDate, staffId:shift.staffId, name, action:"reset", timestamp: nowFull()});
+      const entry = {date:shift.anchorDate, staffId:shift.staffId, name, action:"reset", timestamp: nowFull()};
+      appData.log.push(entry);
       closeOverlay("detailOverlay");
       await saveToDrive();
+      appendLogRowToSheet(entry);
       renderAll();
     }
   };
@@ -547,7 +663,43 @@ document.getElementById("openSettings").onclick = ()=>{
   dirtyModal = true;
   document.getElementById("settingsOverlay").classList.add("show");
   document.getElementById("scheduleDate").value = currentDate;
-  renderRosterList(); renderScheduleList(); renderLogTable();
+  renderRosterList(); renderScheduleList(); renderLogTable(); renderSheetLinks();
+};
+
+function renderSheetLinks(){
+  const shiftEl = document.getElementById("shiftSheetLink");
+  const logEl = document.getElementById("logSheetLink");
+  shiftEl.innerHTML = appData.sheetIds.shiftSheetId
+    ? `現在のシート: <a href="${sheetUrl(appData.sheetIds.shiftSheetId)}" target="_blank">${SHIFT_SHEET_TITLE}</a>`
+    : "まだ作成されていません。「シフト表を開く/作成」を押すと作成されます。";
+  logEl.innerHTML = appData.sheetIds.logSheetId
+    ? `現在のシート: <a href="${sheetUrl(appData.sheetIds.logSheetId)}" target="_blank">${LOG_SHEET_TITLE}</a>`
+    : "打刻が発生すると自動的に作成されます。先に手動で開くこともできます。";
+}
+
+document.getElementById("openShiftSheetBtn").onclick = async ()=>{
+  document.getElementById("openShiftSheetBtn").textContent = "準備中...";
+  try{
+    const id = await ensureShiftSheet();
+    renderSheetLinks();
+    window.open(sheetUrl(id), "_blank");
+  }catch(e){ console.error(e); toast("シートの作成に失敗しました"); }
+  document.getElementById("openShiftSheetBtn").textContent = "📄 シフト表を開く/作成";
+};
+document.getElementById("importShiftSheetBtn").onclick = async ()=>{
+  document.getElementById("importShiftSheetBtn").textContent = "読み込み中...";
+  try{ await importShiftsFromSheet(); renderScheduleList(); }
+  catch(e){ console.error(e); toast("読み込みに失敗しました"); }
+  document.getElementById("importShiftSheetBtn").textContent = "↓ 表の内容を読み込む";
+};
+document.getElementById("openLogSheetBtn").onclick = async ()=>{
+  document.getElementById("openLogSheetBtn").textContent = "準備中...";
+  try{
+    const id = await ensureLogSheet();
+    renderSheetLinks();
+    window.open(sheetUrl(id), "_blank");
+  }catch(e){ console.error(e); toast("シートの作成に失敗しました"); }
+  document.getElementById("openLogSheetBtn").textContent = "📄 打刻ログ表を開く/作成";
 };
 document.querySelectorAll(".tabbtn").forEach(btn=>{
   btn.onclick = ()=>{
