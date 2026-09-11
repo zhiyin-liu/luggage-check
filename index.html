@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>手荷物検査確認表（Google Drive連携版）</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root{
+    --navy:#17233F; --navy-2:#22335A; --paper:#F3F5F8; --card:#FFFFFF;
+    --line:#DCE1E9; --text:#1A2233; --text-dim:#6B7688;
+    --checked:#2F63E0; --checked-pale:#D7E4FF; --danger:#D0472C; --danger-pale:#FBE7E2;
+    --warn:#C97A1E; --warn-pale:#FBEBD3; --ok:#1E9E63; --done-pale:#EBEDF1;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI",sans-serif;background:var(--paper);color:var(--text);-webkit-tap-highlight-color:transparent;user-select:none;}
+  header{background:linear-gradient(180deg,var(--navy),var(--navy-2));color:#fff;padding:16px 20px 12px;display:flex;align-items:center;justify-content:space-between;}
+  header h1{margin:0;font-size:19px;font-weight:700;}
+  header .clock{font-size:13px;color:#C7D2EA;margin-top:2px;}
+  .headright{display:flex;align-items:center;gap:10px;}
+  .synctag{font-size:11px;color:#AFC1E8;}
+  .gear{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+  .gear:active{background:rgba(255,255,255,.25);}
+
+  #loginScreen{display:flex;flex-direction:column;align-items:center;justify-content:center;height:calc(100vh - 70px);text-align:center;padding:30px;}
+  #loginScreen h2{font-size:18px;margin-bottom:6px;}
+  #loginScreen p{color:var(--text-dim);font-size:13px;max-width:340px;line-height:1.7;margin-bottom:20px;}
+  .glogin{background:var(--navy);color:#fff;border:none;border-radius:10px;padding:14px 26px;font-size:15px;font-weight:700;cursor:pointer;}
+  #appRoot{display:none;}
+
+  .datebar{display:flex;gap:10px;padding:14px 16px 4px;}
+  .datetab{flex:1;background:var(--card);border:2px solid var(--line);border-radius:12px;padding:10px 6px;text-align:center;cursor:pointer;}
+  .datetab .label{font-size:12px;color:var(--text-dim);font-weight:600;}
+  .datetab .date{font-size:17px;font-weight:700;margin-top:2px;}
+  .datetab.active{border-color:var(--checked);background:var(--checked-pale);}
+  .datetab.active .label{color:var(--checked);}
+
+  .summary{padding:8px 16px 0;font-size:13px;color:var(--text-dim);display:flex;justify-content:space-between;align-items:center;}
+  .refreshbtn{font-size:12px;color:var(--checked);cursor:pointer;font-weight:600;}
+
+  .section{padding:16px 16px 0;}
+  .section-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;padding:6px 12px;border-radius:8px;margin-bottom:10px;}
+  .section-head .cnt{font-weight:600;opacity:.75;}
+  .section-head.g1{background:var(--danger-pale);color:var(--danger);}
+  .section-head.g2{background:var(--warn-pale);color:var(--warn);}
+  .section-head.g3{background:var(--done-pale);color:var(--text-dim);}
+  .section-head.g4{background:var(--checked-pale);color:var(--checked);}
+  .section-head.g5{background:var(--done-pale);color:var(--text-dim);}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(150px,1fr));gap:12px;padding-bottom:8px;}
+  .tile{position:relative;height:92px;border-radius:14px;overflow:hidden;border:2px solid var(--line);cursor:pointer;background:#fff;}
+  .tile .half{position:absolute;top:0;bottom:0;width:50%;background:#fff;transition:background .15s ease;}
+  .tile .half.left{left:0;border-right:1px solid rgba(0,0,0,.04);}
+  .tile .half.right{right:0;}
+  .tile .half.on{background:var(--checked-pale);}
+  .tile .content{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px;pointer-events:none;}
+  .tile .name{font-size:16px;font-weight:700;line-height:1.25;text-align:center;}
+  .tile .plan{font-size:10.5px;color:var(--text-dim);margin-top:3px;}
+  .tile .times{font-size:11px;color:var(--checked);margin-top:2px;font-weight:600;letter-spacing:.02em;}
+  .tile.full{border-color:var(--checked);}
+  .tile.g1{border-color:var(--danger);}
+  .tile.g2{border-color:var(--warn);}
+  .tile .badge{position:absolute;top:5px;z-index:3;font-size:11px;font-weight:700;color:var(--checked);pointer-events:none;}
+  .tile .badge.l{left:7px;} .tile .badge.r{right:7px;}
+  .tile .inherit{position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--text-dim);z-index:3;}
+  .empty-msg{padding:40px 20px;text-align:center;color:var(--text-dim);font-size:14px;}
+
+  .overlay{position:fixed;inset:0;background:rgba(10,15,30,.5);display:none;align-items:flex-end;justify-content:center;z-index:50;}
+  .overlay.show{display:flex;}
+  .sheet{background:#fff;width:100%;max-width:640px;border-radius:18px 18px 0 0;max-height:92vh;display:flex;flex-direction:column;}
+  .sheet-head{padding:16px 18px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);}
+  .sheet-head h2{margin:0;font-size:17px;}
+  .close-x{font-size:22px;color:var(--text-dim);cursor:pointer;padding:2px 8px;}
+  .sheet-body{padding:14px 18px 24px;overflow-y:auto;}
+
+  .detail-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;}
+  .detail-row .k{color:var(--text-dim);}
+  .btnrow{display:flex;gap:10px;margin-top:16px;}
+  .btn{flex:1;padding:12px;border-radius:10px;border:none;font-size:14px;font-weight:700;cursor:pointer;}
+  .btn.primary{background:var(--checked);color:#fff;}
+  .btn.ghost{background:var(--paper);color:var(--text);border:1px solid var(--line);}
+  .btn.danger{background:#FBE7E2;color:var(--danger);}
+
+  .tabs{display:flex;gap:8px;padding:0 18px;border-bottom:1px solid var(--line);}
+  .tabbtn{padding:12px 4px;font-size:14px;font-weight:600;color:var(--text-dim);border-bottom:3px solid transparent;cursor:pointer;}
+  .tabbtn.active{color:var(--navy);border-color:var(--checked);}
+  .tabpanel{display:none;} .tabpanel.active{display:block;}
+
+  .row-line{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px;gap:8px;}
+  .row-line input[type=checkbox]{width:20px;height:20px;flex-shrink:0;}
+  .row-line .rname{flex:1;min-width:0;}
+  .row-line .times2{display:flex;gap:6px;align-items:center;}
+  .row-line input[type=time]{width:82px;padding:6px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .inline-form{display:flex;gap:8px;margin:10px 0 16px;}
+  .inline-form input[type=text]{flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;}
+  .small-btn{background:var(--navy);color:#fff;border:none;border-radius:8px;padding:0 16px;font-size:14px;font-weight:600;cursor:pointer;}
+  .del-x{color:var(--danger);font-size:13px;cursor:pointer;font-weight:700;}
+  .edit-i{color:var(--checked);font-size:13px;cursor:pointer;margin-right:12px;font-weight:600;}
+
+  input[type=date]{padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;width:100%;}
+  .field-label{font-size:13px;color:var(--text-dim);margin:14px 0 6px;font-weight:600;}
+  .hint{font-size:12px;color:var(--text-dim);margin-top:-2px;}
+
+  table.logtbl{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}
+  table.logtbl th,table.logtbl td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);}
+  table.logtbl th{color:var(--text-dim);font-weight:600;}
+  .tag{padding:2px 7px;border-radius:6px;font-size:11px;font-weight:700;}
+  .tag.arrival{background:#E4EEFF;color:var(--checked);}
+  .tag.departure{background:#E2F6EC;color:var(--ok);}
+  .tag.reset{background:#FBE7E2;color:var(--danger);}
+  .note{font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:14px;}
+
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:100;display:none;}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>手荷物検査確認表</h1>
+    <div class="clock" id="clock">--</div>
+  </div>
+  <div class="headright">
+    <div class="synctag" id="syncTag">未接続</div>
+    <div class="gear" id="openSettings" style="display:none;">⚙</div>
+  </div>
+</header>
+
+<div id="loginScreen">
+  <h2>Googleアカウントでログインしてください</h2>
+  <p>打刻データは、ログインしたGoogleアカウントのGoogle Drive（アプリ専用領域）に保存されます。<br>タブレットと管理者PCで同じGoogleアカウントにログインすると、同じデータを見ることができます。</p>
+  <button class="glogin" id="loginBtn">Googleでログイン</button>
+</div>
+
+<div id="appRoot">
+  <div class="datebar" id="dateBar"></div>
+  <div class="summary">
+    <span id="summary"></span>
+    <span class="refreshbtn" id="manualRefresh">↻ 更新</span>
+  </div>
+  <div id="sections"></div>
+</div>
+
+<div class="overlay" id="detailOverlay">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="detailName">-</h2><span class="close-x" data-close="detailOverlay">✕</span></div>
+    <div class="sheet-body">
+      <div class="detail-row"><span class="k">予定</span><span id="detailPlan">-</span></div>
+      <div class="detail-row"><span class="k">出勤チェック</span><span id="detailArrival">未</span></div>
+      <div class="detail-row"><span class="k">退勤チェック</span><span id="detailDeparture">未</span></div>
+      <div class="btnrow" id="detailActions"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="settingsOverlay">
+  <div class="sheet" style="max-height:92vh;">
+    <div class="sheet-head"><h2>管理設定</h2><span class="close-x" data-close="settingsOverlay">✕</span></div>
+    <div class="tabs">
+      <div class="tabbtn active" data-tab="roster">名簿管理</div>
+      <div class="tabbtn" data-tab="schedule">出勤予定</div>
+      <div class="tabbtn" data-tab="log">記録・出力</div>
+    </div>
+    <div class="sheet-body">
+      <div class="tabpanel active" id="panel-roster">
+        <div class="inline-form">
+          <input type="text" id="newStaffName" placeholder="氏名を入力">
+          <button class="small-btn" id="addStaffBtn">追加</button>
+        </div>
+        <div id="rosterList"></div>
+      </div>
+      <div class="tabpanel" id="panel-schedule">
+        <div class="field-label">対象日（出勤する日）</div>
+        <input type="date" id="scheduleDate">
+        <div class="hint">夜勤で退勤時刻が出勤時刻より早い場合、自動的に「翌日退勤」として扱われます。</div>
+        <div class="field-label">この日に出勤予定のスタッフと時刻</div>
+        <div id="scheduleList"></div>
+        <div class="btnrow"><button class="btn primary" id="saveScheduleBtn">この日の予定を保存</button></div>
+      </div>
+      <div class="tabpanel" id="panel-log">
+        <div class="field-label">期間で絞り込み（空欄で全期間）</div>
+        <div style="display:flex;gap:8px;">
+          <input type="date" id="logFrom"><input type="date" id="logTo">
+        </div>
+        <div class="btnrow">
+          <button class="btn ghost" id="filterLogBtn">絞り込む</button>
+          <button class="btn primary" id="exportCsvBtn">CSVダウンロード</button>
+        </div>
+        <table class="logtbl" id="logTable"><thead><tr><th>日付</th><th>氏名</th><th>区分</th><th>時刻</th></tr></thead><tbody></tbody></table>
+        <div class="note">データはこのGoogleアカウントのDriveアプリ専用領域に保存されています。同じアカウントでログインした端末はすべて同じデータを見られます。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* =========================================================
+   ▼▼▼ ここを自分の Client ID に置き換えてください ▼▼▼
+   ========================================================= */
+const CLIENT_ID = "YOUR_CLIENT_ID.apps.googleusercontent.com";
+/* ========================================================= */
+
+const SCOPES = "https://www.googleapis.com/auth/drive.appdata";
+const FILE_NAME = "luggage_check_data.json";
+
+let accessToken = null;
+let fileId = null;
+let tokenClient = null;
+// appData.shifts[date][staffId] = {arrival:"08:00", departure:"17:00"}
+// appData.status[date][staffId] = {arrival: fullTimestamp|null, departure: fullTimestamp|null}   (date = shift's anchor/arrival date)
+let appData = { staff: [], shifts: {}, status: {}, log: [] };
+let currentDate = fmtDate(new Date());
+let refreshTimer = null, reclassifyTimer = null, rolloverTimer = null;
+let dirtyModal = false;
+
+/* ---------- date/time helpers ---------- */
+function fmtDate(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; }
+function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function parseDate(s){ const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); }
+const WD=["日","月","火","水","木","金","土"];
+function shortLabel(d){ return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`; }
+function nowFull(){ const d=new Date(); return `${fmtDate(d)} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`; }
+function tickClock(){ const d=new Date(); document.getElementById("clock").textContent=`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`; }
+setInterval(tickClock,1000);
+function timeToMin(hhmm){ const [h,m]=hhmm.split(":").map(Number); return h*60+m; }
+function combineDateTime(dateStr, hhmm){
+  const [y,m,d]=dateStr.split("-").map(Number);
+  const [hh,mm]=hhmm.split(":").map(Number);
+  return new Date(y,m-1,d,hh,mm,0);
+}
+function isOvernight(arrival, departure){ return timeToMin(departure) <= timeToMin(arrival); }
+
+function toast(msg){
+  const t=document.getElementById("toast");
+  t.textContent=msg; t.style.display="block";
+  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none", 2500);
+}
+
+/* ---------- Google Sign-in ---------- */
+window.addEventListener("load", ()=>{
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: async (resp)=>{
+      if(resp.error){ toast("ログインに失敗しました: "+resp.error); return; }
+      accessToken = resp.access_token;
+      document.getElementById("syncTag").textContent = "接続中...";
+      await bootAfterLogin();
+    }
+  });
+  tokenClient.requestAccessToken({ prompt: "" });
+});
+document.getElementById("loginBtn").onclick = ()=>{ tokenClient.requestAccessToken({ prompt: "consent" }); };
+
+async function bootAfterLogin(){
+  document.getElementById("loginScreen").style.display="none";
+  document.getElementById("appRoot").style.display="block";
+  document.getElementById("openSettings").style.display="flex";
+  document.getElementById("syncTag").textContent = "Drive同期: 準備中";
+  try{
+    await ensureFile();
+    await loadFromDrive();
+    document.getElementById("syncTag").textContent = "Drive同期: OK";
+    renderDateBar();
+    renderAll();
+    if(refreshTimer) clearInterval(refreshTimer);
+    if(reclassifyTimer) clearInterval(reclassifyTimer);
+    if(rolloverTimer) clearInterval(rolloverTimer);
+    refreshTimer = setInterval(autoRefresh, 20000);       // pull latest data from Drive
+    reclassifyTimer = setInterval(()=>{ if(!dirtyModal) renderAll(); }, 30000); // re-sort groups as time passes
+    rolloverTimer = setInterval(checkDateRollover, 60000); // detect midnight rollover
+  }catch(e){
+    console.error(e);
+    document.getElementById("syncTag").textContent = "接続エラー";
+    toast("Google Driveへの接続に失敗しました。CLIENT_IDの設定をご確認ください。");
+  }
+}
+
+function checkDateRollover(){
+  const validDates = [fmtDate(addDays(new Date(),-1)), fmtDate(new Date()), fmtDate(addDays(new Date(),1))];
+  renderDateBar();
+  if(!validDates.includes(currentDate)){
+    currentDate = fmtDate(new Date());
+  }
+  renderAll();
+}
+
+async function autoRefresh(){
+  if(dirtyModal) return;
+  try{
+    await loadFromDrive();
+    renderDateBar();
+    renderAll();
+    document.getElementById("syncTag").textContent = "Drive同期: OK ("+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})+")";
+  }catch(e){
+    document.getElementById("syncTag").textContent = "同期エラー（再ログインが必要かもしれません）";
+  }
+}
+document.getElementById("manualRefresh").onclick = autoRefresh;
+
+/* ---------- Drive REST helpers ---------- */
+async function driveFetch(url, opts={}){
+  opts.headers = Object.assign({}, opts.headers, { Authorization: "Bearer " + accessToken });
+  const res = await fetch(url, opts);
+  if(res.status === 401){
+    await new Promise((resolve)=>{
+      tokenClient.callback = async (resp)=>{ accessToken = resp.access_token; resolve(); };
+      tokenClient.requestAccessToken({ prompt: "" });
+    });
+    opts.headers.Authorization = "Bearer " + accessToken;
+    return fetch(url, opts);
+  }
+  return res;
+}
+
+async function ensureFile(){
+  const q = encodeURIComponent(`name='${FILE_NAME}' and trashed=false`);
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&spaces=appDataFolder&fields=files(id,name)`);
+  const data = await res.json();
+  if(data.files && data.files.length > 0){ fileId = data.files[0].id; return; }
+  const seedStaff = ["白垢 美千代","重松 由美","宮田 富士美","木佐貫 幸子","西島 多美",
+                      "鳥飼 武彦","山下 弘美","河井 美央","湯浅 明子","山本 翔太郎"]
+                      .map((n,i)=>({id:"s"+(i+1), name:n}));
+  const today = fmtDate(new Date());
+  const shiftsToday = {};
+  seedStaff.forEach(s=> shiftsToday[s.id] = {arrival:"09:00", departure:"18:00"});
+  const initial = { staff: seedStaff, shifts:{ [today]: shiftsToday }, status:{}, log:[] };
+  const metadata = { name: FILE_NAME, parents:["appDataFolder"], mimeType:"application/json" };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], {type:"application/json"}));
+  form.append("file", new Blob([JSON.stringify(initial)], {type:"application/json"}));
+  const createRes = await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", { method:"POST", body: form });
+  const created = await createRes.json();
+  fileId = created.id;
+  appData = initial;
+}
+
+async function loadFromDrive(){
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  appData = await res.json();
+  if(!appData.staff) appData.staff=[];
+  if(!appData.shifts) appData.shifts={};
+  if(!appData.status) appData.status={};
+  if(!appData.log) appData.log=[];
+}
+
+async function saveToDrive(){
+  try{
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+    const latest = await res.json();
+    appData = Object.assign({}, latest, appData);
+    await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+      method:"PATCH", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(appData)
+    });
+    document.getElementById("syncTag").textContent = "Drive同期: 保存済み";
+  }catch(e){
+    console.error(e);
+    toast("保存に失敗しました。通信状態をご確認ください。");
+  }
+}
+
+/* ---------- date bar ---------- */
+function renderDateBar(){
+  const bar = document.getElementById("dateBar");
+  bar.innerHTML = "";
+  const today = new Date();
+  const days = [{off:-1,label:"昨日"},{off:0,label:"今日"},{off:1,label:"明日"}];
+  days.forEach(dd=>{
+    const d = addDays(today, dd.off);
+    const key = fmtDate(d);
+    const el = document.createElement("div");
+    el.className = "datetab" + (key===currentDate ? " active" : "");
+    el.innerHTML = `<div class="label">${dd.label}</div><div class="date">${shortLabel(d)}</div>`;
+    el.onclick = ()=>{ currentDate = key; renderDateBar(); renderAll(); };
+    bar.appendChild(el);
+  });
+}
+
+/* ---------- build visible shift list for a tab date ---------- */
+function getVisibleShifts(tabDate){
+  const list = [];
+  const same = appData.shifts[tabDate] || {};
+  Object.keys(same).forEach(staffId=>{
+    list.push({ anchorDate: tabDate, staffId, arrival: same[staffId].arrival, departure: same[staffId].departure });
+  });
+  const prevDate = fmtDate(addDays(parseDate(tabDate), -1));
+  const prevShifts = appData.shifts[prevDate] || {};
+  Object.keys(prevShifts).forEach(staffId=>{
+    const sh = prevShifts[staffId];
+    if(isOvernight(sh.arrival, sh.departure)){
+      list.push({ anchorDate: prevDate, staffId, arrival: sh.arrival, departure: sh.departure, inherited:true });
+    }
+  });
+  return list;
+}
+
+function shiftDateTimes(shift){
+  const arrivalDT = combineDateTime(shift.anchorDate, shift.arrival);
+  const overnight = isOvernight(shift.arrival, shift.departure);
+  const departureDateStr = overnight ? fmtDate(addDays(parseDate(shift.anchorDate),1)) : shift.anchorDate;
+  const departureDT = combineDateTime(departureDateStr, shift.departure);
+  return { arrivalDT, departureDT, overnight };
+}
+
+function classify(shift, status, now){
+  const { arrivalDT, departureDT } = shiftDateTimes(shift);
+  const aStart = new Date(arrivalDT.getTime() - 60*60000);
+  const aEnd   = new Date(arrivalDT.getTime() + 15*60000);
+  const dStart = new Date(departureDT.getTime() - 15*60000);
+  const dEnd   = new Date(departureDT.getTime() + 60*60000);
+  const bothChecked = !!(status && status.arrival && status.departure);
+
+  if(now >= aStart && now <= aEnd) return {g:1, arrivalDT, departureDT};
+  if(now >= dStart && now <= dEnd) return {g:1, arrivalDT, departureDT};
+  if(now > dEnd) return { g: bothChecked ? 5 : 2, arrivalDT, departureDT };
+  if(now < aStart) return {g:3, arrivalDT, departureDT};
+  return {g:4, arrivalDT, departureDT}; // aEnd < now < dStart
+}
+
+const GROUP_META = {
+  1:{cls:"g1", label:"🔴 まもなく出勤・退勤（要確認）"},
+  2:{cls:"g2", label:"🟠 退勤時刻を過ぎても未確認"},
+  3:{cls:"g3", label:"⚪ 出勤までまだ時間がある"},
+  4:{cls:"g4", label:"🔵 勤務中"},
+  5:{cls:"g5", label:"⚫ 完了（退勤後1時間以上）"},
+};
+
+/* ---------- master render ---------- */
+function renderAll(){
+  const shifts = getVisibleShifts(currentDate);
+  const sectionsEl = document.getElementById("sections");
+  const summaryEl = document.getElementById("summary");
+  sectionsEl.innerHTML = "";
+
+  if(shifts.length === 0){
+    sectionsEl.innerHTML = `<div class="empty-msg">この日の出勤予定は登録されていません。<br>「⚙ 管理設定 → 出勤予定」で登録してください。</div>`;
+    summaryEl.textContent = "";
+    return;
+  }
+
+  const now = new Date();
+  const groups = {1:[],2:[],3:[],4:[],5:[]};
+  let doneFull=0, doneHalf=0;
+
+  shifts.forEach(shift=>{
+    const person = appData.staff.find(s=>s.id===shift.staffId);
+    if(!person) return;
+    const dayStatus = appData.status[shift.anchorDate] || {};
+    const st = dayStatus[shift.staffId] || {arrival:null, departure:null};
+    const isFull = !!(st.arrival && st.departure);
+    const isHalf = !!(st.arrival && !st.departure);
+    if(isFull) doneFull++; else if(isHalf) doneHalf++;
+    const { g, arrivalDT, departureDT } = classify(shift, st, now);
+    groups[g].push({ shift, person, st, arrivalDT, departureDT });
+  });
+
+  [1,2,3,4,5].forEach(g=>{
+    if(groups[g].length === 0) return;
+    groups[g].sort((a,b)=> a.arrivalDT - b.arrivalDT);
+    const meta = GROUP_META[g];
+    const section = document.createElement("div");
+    section.className = "section";
+    section.innerHTML = `<div class="section-head ${meta.cls}">${meta.label} <span class="cnt">(${groups[g].length})</span></div>`;
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    groups[g].forEach(item=>{
+      grid.appendChild(buildTile(item, g));
+    });
+    section.appendChild(grid);
+    sectionsEl.appendChild(section);
+  });
+
+  summaryEl.textContent = `対象: ${shifts.length}名　両方済: ${doneFull}名　出勤のみ: ${doneHalf}名　未: ${shifts.length-doneFull-doneHalf}名`;
+}
+
+function buildTile(item, g){
+  const { shift, person, st } = item;
+  const isFull = !!(st.arrival && st.departure);
+  const tile = document.createElement("div");
+  tile.className = "tile" + (isFull ? " full" : "") + (g===1?" g1":"") + (g===2?" g2":"");
+  const planTxt = `予定 ${shift.arrival}〜${shift.departure}${item.arrivalDT && shiftDateTimes(shift).overnight ? "(翌)" : ""}`;
+  tile.innerHTML = `
+    <div class="half left ${st.arrival ? "on":""}"></div>
+    <div class="half right ${st.departure ? "on":""}"></div>
+    ${st.arrival ? `<span class="badge l">入</span>`:""}
+    ${st.departure ? `<span class="badge r">出</span>`:""}
+    <div class="content">
+      <div class="name">${person.name}</div>
+      <div class="plan">${planTxt}</div>
+      <div class="times">${st.arrival ? "入 "+st.arrival.split(" ")[1].slice(0,5) : ""}${st.departure ? "  出 "+st.departure.split(" ")[1].slice(0,5) : ""}</div>
+    </div>
+    ${shift.inherited ? `<span class="inherit">前日出勤</span>` : ""}`;
+  tile.onclick = ()=> handleTileClick(shift, person.name, st);
+  return tile;
+}
+
+/* ---------- click logic (status keyed by shift.anchorDate, NOT the visible tab date) ---------- */
+async function handleTileClick(shift, name, st){
+  if(!st.arrival){ await setStatus(shift, "arrival"); }
+  else if(!st.departure){ await setStatus(shift, "departure"); }
+  else { openDetail(shift, name, st); }
+}
+
+async function setStatus(shift, field){
+  const date = shift.anchorDate, id = shift.staffId;
+  if(!appData.status[date]) appData.status[date] = {};
+  if(!appData.status[date][id]) appData.status[date][id] = {arrival:null, departure:null};
+  const ts = nowFull();
+  appData.status[date][id][field] = ts;
+  const person = appData.staff.find(s=>s.id===id);
+  appData.log.push({ date, staffId:id, name: person?person.name:id, action:field, timestamp: ts });
+  renderAll();
+  await saveToDrive();
+  renderAll();
+}
+
+/* ---------- detail sheet ---------- */
+function openDetail(shift, name, st){
+  dirtyModal = true;
+  document.getElementById("detailName").textContent = name;
+  document.getElementById("detailPlan").textContent = `${shift.arrival} 〜 ${shift.departure}`;
+  document.getElementById("detailArrival").textContent = st.arrival ? st.arrival.split(" ")[1] : "未";
+  document.getElementById("detailDeparture").textContent = st.departure ? st.departure.split(" ")[1] : "未";
+  const actions = document.getElementById("detailActions");
+  actions.innerHTML = `<button class="btn danger" id="resetBtn">この日の記録をリセット</button>`;
+  document.getElementById("resetBtn").onclick = async ()=>{
+    if(confirm(`${name} さんの ${shift.anchorDate} の記録をリセットしますか？`)){
+      delete appData.status[shift.anchorDate][shift.staffId];
+      appData.log.push({date:shift.anchorDate, staffId:shift.staffId, name, action:"reset", timestamp: nowFull()});
+      closeOverlay("detailOverlay");
+      await saveToDrive();
+      renderAll();
+    }
+  };
+  document.getElementById("detailOverlay").classList.add("show");
+}
+function closeOverlay(id){ document.getElementById(id).classList.remove("show"); dirtyModal=false; }
+document.querySelectorAll("[data-close]").forEach(el=>{ el.onclick=()=>closeOverlay(el.dataset.close); });
+document.getElementById("detailOverlay").onclick=(e)=>{ if(e.target.id==="detailOverlay") closeOverlay("detailOverlay"); };
+document.getElementById("settingsOverlay").onclick=(e)=>{ if(e.target.id==="settingsOverlay") closeOverlay("settingsOverlay"); };
+
+/* ---------- settings ---------- */
+document.getElementById("openSettings").onclick = ()=>{
+  dirtyModal = true;
+  document.getElementById("settingsOverlay").classList.add("show");
+  document.getElementById("scheduleDate").value = currentDate;
+  renderRosterList(); renderScheduleList(); renderLogTable();
+};
+document.querySelectorAll(".tabbtn").forEach(btn=>{
+  btn.onclick = ()=>{
+    document.querySelectorAll(".tabbtn").forEach(b=>b.classList.remove("active"));
+    document.querySelectorAll(".tabpanel").forEach(p=>p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("panel-"+btn.dataset.tab).classList.add("active");
+  };
+});
+
+function renderRosterList(){
+  const el = document.getElementById("rosterList");
+  el.innerHTML = "";
+  appData.staff.forEach(s=>{
+    const row = document.createElement("div");
+    row.className = "row-line";
+    row.innerHTML = `<span>${s.name}</span><span><span class="edit-i" data-id="${s.id}">編集</span><span class="del-x" data-id="${s.id}">削除</span></span>`;
+    el.appendChild(row);
+  });
+  el.querySelectorAll(".del-x").forEach(x=>{
+    x.onclick = async ()=>{
+      const id = x.dataset.id;
+      const s = appData.staff.find(p=>p.id===id);
+      if(confirm(`「${s.name}」を名簿から削除しますか？`)){
+        appData.staff = appData.staff.filter(p=>p.id!==id);
+        await saveToDrive();
+        renderRosterList(); renderScheduleList(); renderAll();
+      }
+    };
+  });
+  el.querySelectorAll(".edit-i").forEach(x=>{
+    x.onclick = async ()=>{
+      const id = x.dataset.id;
+      const s = appData.staff.find(p=>p.id===id);
+      const newName = prompt("氏名を編集", s.name);
+      if(newName && newName.trim()){
+        s.name = newName.trim();
+        await saveToDrive();
+        renderRosterList(); renderScheduleList(); renderAll();
+      }
+    };
+  });
+}
+document.getElementById("addStaffBtn").onclick = async ()=>{
+  const input = document.getElementById("newStaffName");
+  const name = input.value.trim();
+  if(!name) return;
+  appData.staff.push({ id:"s"+Date.now(), name });
+  input.value = "";
+  await saveToDrive();
+  renderRosterList(); renderScheduleList();
+};
+
+/* ---------- schedule (per-staff arrival/departure time) ---------- */
+function renderScheduleList(){
+  const dateVal = document.getElementById("scheduleDate").value || currentDate;
+  const existing = appData.shifts[dateVal] || {};
+  const el = document.getElementById("scheduleList");
+  el.innerHTML = "";
+  appData.staff.forEach(s=>{
+    const has = existing[s.id];
+    const row = document.createElement("div");
+    row.className = "row-line";
+    row.innerHTML = `
+      <input type="checkbox" class="skchk" data-id="${s.id}" ${has ? "checked":""}>
+      <span class="rname">${s.name}</span>
+      <span class="times2">
+        <input type="time" class="skarr" data-id="${s.id}" value="${has ? has.arrival : "09:00"}">
+        〜
+        <input type="time" class="skdep" data-id="${s.id}" value="${has ? has.departure : "18:00"}">
+      </span>`;
+    el.appendChild(row);
+  });
+}
+document.getElementById("scheduleDate").onchange = renderScheduleList;
+document.getElementById("saveScheduleBtn").onclick = async ()=>{
+  const dateVal = document.getElementById("scheduleDate").value;
+  if(!dateVal){ alert("対象日を選択してください"); return; }
+  const newShiftsForDate = {};
+  document.querySelectorAll("#scheduleList .skchk:checked").forEach(chk=>{
+    const id = chk.dataset.id;
+    const arr = document.querySelector(`#scheduleList .skarr[data-id="${id}"]`).value || "09:00";
+    const dep = document.querySelector(`#scheduleList .skdep[data-id="${id}"]`).value || "18:00";
+    newShiftsForDate[id] = { arrival: arr, departure: dep };
+  });
+  appData.shifts[dateVal] = newShiftsForDate;
+  await saveToDrive();
+  alert(`${dateVal} の出勤予定を保存しました（${Object.keys(newShiftsForDate).length}名）`);
+  renderAll();
+};
+
+/* ---------- log / export ---------- */
+function actionLabel(a){
+  if(a==="arrival") return `<span class="tag arrival">出勤チェック</span>`;
+  if(a==="departure") return `<span class="tag departure">退勤チェック</span>`;
+  return `<span class="tag reset">リセット</span>`;
+}
+function renderLogTable(){
+  const from = document.getElementById("logFrom").value;
+  const to = document.getElementById("logTo").value;
+  let rows = appData.log.slice().sort((a,b)=> b.timestamp.localeCompare(a.timestamp));
+  if(from) rows = rows.filter(r=>r.date >= from);
+  if(to) rows = rows.filter(r=>r.date <= to);
+  document.querySelector("#logTable tbody").innerHTML = rows.map(r=>`
+    <tr><td>${r.date}</td><td>${r.name}</td><td>${actionLabel(r.action)}</td><td>${r.timestamp.split(" ")[1]}</td></tr>
+  `).join("");
+  return rows;
+}
+document.getElementById("filterLogBtn").onclick = renderLogTable;
+document.getElementById("exportCsvBtn").onclick = ()=>{
+  const rows = renderLogTable();
+  const header = "日付,氏名,区分,時刻\n";
+  const body = rows.map(r=>{
+    const actionJp = r.action==="arrival"?"出勤チェック":r.action==="departure"?"退勤チェック":"リセット";
+    return `${r.date},${r.name},${actionJp},${r.timestamp.split(" ")[1]}`;
+  }).join("\n");
+  const csv = "\uFEFF" + header + body;
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `手荷物検査記録_${fmtDate(new Date())}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+</script>
+</body>
+</html>
