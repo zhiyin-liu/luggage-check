@@ -255,6 +255,29 @@ function toast(msg){
 }
 
 /* ---------- Google Sign-in ---------- */
+let tokenRefreshTimer = null;
+function scheduleTokenRefresh(expiresInSeconds){
+  if(tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+  const seconds = Math.max((expiresInSeconds || 3600) - 300, 30); // refresh 5 min before expiry
+  tokenRefreshTimer = setTimeout(silentRefresh, seconds * 1000);
+}
+function silentRefresh(){
+  tokenClient.callback = (resp)=>{
+    if(resp.error){
+      // silent refresh failed (e.g. session/cookies not available) - fall back to showing login screen
+      console.warn("silent refresh failed", resp.error);
+      document.getElementById("syncTag").textContent = "再ログインが必要です";
+      document.getElementById("appRoot").style.display = "none";
+      document.getElementById("openSettings").style.display = "none";
+      document.getElementById("loginScreen").style.display = "flex";
+      return;
+    }
+    accessToken = resp.access_token;
+    scheduleTokenRefresh(resp.expires_in);
+  };
+  tokenClient.requestAccessToken({ prompt: "" });
+}
+
 window.addEventListener("load", ()=>{
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
@@ -262,6 +285,7 @@ window.addEventListener("load", ()=>{
     callback: async (resp)=>{
       if(resp.error){ toast("ログインに失敗しました: "+resp.error); return; }
       accessToken = resp.access_token;
+      scheduleTokenRefresh(resp.expires_in);
       document.getElementById("syncTag").textContent = "接続中...";
       await bootAfterLogin();
     }
@@ -322,7 +346,11 @@ async function driveFetch(url, opts={}){
   const res = await fetch(url, opts);
   if(res.status === 401){
     await new Promise((resolve)=>{
-      tokenClient.callback = async (resp)=>{ accessToken = resp.access_token; resolve(); };
+      tokenClient.callback = async (resp)=>{
+        accessToken = resp.access_token;
+        scheduleTokenRefresh(resp.expires_in);
+        resolve();
+      };
       tokenClient.requestAccessToken({ prompt: "" });
     });
     opts.headers.Authorization = "Bearer " + accessToken;
