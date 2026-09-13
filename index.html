@@ -147,8 +147,8 @@
     <div class="sheet-head"><h2 id="detailName">-</h2><span class="close-x" data-close="detailOverlay">✕</span></div>
     <div class="sheet-body">
       <div class="detail-row"><span class="k">予定</span><span id="detailPlan">-</span></div>
-      <div class="detail-row"><span class="k">出勤チェック</span><span id="detailArrival">未</span></div>
-      <div class="detail-row"><span class="k">退勤チェック</span><span id="detailDeparture">未</span></div>
+      <div class="detail-row"><span class="k">出勤前チェック</span><span id="detailArrival">未</span></div>
+      <div class="detail-row"><span class="k">退勤後チェック</span><span id="detailDeparture">未</span></div>
       <div class="btnrow" id="detailActions"></div>
     </div>
   </div>
@@ -241,6 +241,11 @@ function nowFull(){ const d=new Date(); return `${fmtDate(d)} ${String(d.getHour
 function tickClock(){ const d=new Date(); document.getElementById("clock").textContent=`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`; }
 setInterval(tickClock,1000);
 function timeToMin(hhmm){ const [h,m]=hhmm.split(":").map(Number); return h*60+m; }
+function normalizeTimeStr(t){
+  // "24:00" (common Japanese convention for midnight) is treated the same as "00:00" (next day)
+  if(/^24:00$/.test((t||"").trim())) return "00:00";
+  return t;
+}
 function combineDateTime(dateStr, hhmm){
   const [y,m,d]=dateStr.split("-").map(Number);
   const [hh,mm]=hhmm.split(":").map(Number);
@@ -319,10 +324,10 @@ async function bootAfterLogin(){
 }
 
 function checkDateRollover(){
-  const validDates = [fmtDate(addDays(new Date(),-1)), fmtDate(new Date()), fmtDate(addDays(new Date(),1))];
+  const todayKey = fmtDate(new Date());
   renderDateBar();
-  if(!validDates.includes(currentDate)){
-    currentDate = fmtDate(new Date());
+  if(currentDate !== todayKey){
+    currentDate = todayKey;
   }
   renderAll();
 }
@@ -456,7 +461,7 @@ function sheetUrl(id){ return `https://docs.google.com/spreadsheets/d/${id}/edit
 async function appendLogRowToSheet(entry){
   try{
     const id = await ensureLogSheet();
-    const actionJp = entry.action==="arrival"?"出勤チェック":entry.action==="departure"?"退勤チェック":"リセット";
+    const actionJp = entry.action==="arrival"?"出勤前チェック":entry.action==="departure"?"退勤後チェック":"リセット";
     await driveFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/ログ!A:D:append?valueInputOption=RAW`, {
       method:"POST", headers:{ "Content-Type":"application/json" },
       body: JSON.stringify({ values:[[entry.date, entry.name, actionJp, entry.timestamp.split(" ")[1]]] })
@@ -493,7 +498,9 @@ async function importShiftsFromSheet(){
       nameToId[name] = staffId;
       addedStaff++;
     }
-    appData.shifts[dateStr][staffId] = { arrival: arr.length===4?"0"+arr:arr, departure: dep.length===4?"0"+dep:dep };
+    const arrPad = arr.length===4?"0"+arr:arr;
+    const depPad = dep.length===4?"0"+dep:dep;
+    appData.shifts[dateStr][staffId] = { arrival: normalizeTimeStr(arrPad), departure: normalizeTimeStr(depPad) };
   });
 
   await saveToDrive();
@@ -502,21 +509,15 @@ async function importShiftsFromSheet(){
   renderRosterList();
 }
 
-/* ---------- date bar ---------- */
+/* ---------- date bar (today only; overnight staff still appear automatically via getVisibleShifts) ---------- */
 function renderDateBar(){
+  currentDate = fmtDate(new Date());
   const bar = document.getElementById("dateBar");
   bar.innerHTML = "";
-  const today = new Date();
-  const days = [{off:-1,label:"昨日"},{off:0,label:"今日"},{off:1,label:"明日"}];
-  days.forEach(dd=>{
-    const d = addDays(today, dd.off);
-    const key = fmtDate(d);
-    const el = document.createElement("div");
-    el.className = "datetab" + (key===currentDate ? " active" : "");
-    el.innerHTML = `<div class="label">${dd.label}</div><div class="date">${shortLabel(d)}</div>`;
-    el.onclick = ()=>{ currentDate = key; renderDateBar(); renderAll(); };
-    bar.appendChild(el);
-  });
+  const el = document.createElement("div");
+  el.className = "datetab active";
+  el.innerHTML = `<div class="label">今日</div><div class="date">${shortLabel(new Date())}</div>`;
+  bar.appendChild(el);
 }
 
 /* ---------- build visible shift list for a tab date ---------- */
@@ -526,12 +527,25 @@ function getVisibleShifts(tabDate){
   Object.keys(same).forEach(staffId=>{
     list.push({ anchorDate: tabDate, staffId, arrival: same[staffId].arrival, departure: same[staffId].departure });
   });
+  // overnight shifts from the previous day whose departure falls on tabDate
   const prevDate = fmtDate(addDays(parseDate(tabDate), -1));
   const prevShifts = appData.shifts[prevDate] || {};
   Object.keys(prevShifts).forEach(staffId=>{
     const sh = prevShifts[staffId];
     if(isOvernight(sh.arrival, sh.departure)){
       list.push({ anchorDate: prevDate, staffId, arrival: sh.arrival, departure: sh.departure, inherited:true });
+    }
+  });
+  // shifts anchored on the next day, but whose "1時間前" arrival window already starts today
+  // (e.g. arrival at 00:00〜00:59 tonight — the arrival window itself begins before midnight)
+  const nextDate = fmtDate(addDays(parseDate(tabDate), 1));
+  const nextShifts = appData.shifts[nextDate] || {};
+  Object.keys(nextShifts).forEach(staffId=>{
+    const sh = nextShifts[staffId];
+    const arrivalDT = combineDateTime(nextDate, sh.arrival);
+    const windowStart = new Date(arrivalDT.getTime() - 60*60000);
+    if(fmtDate(windowStart) === tabDate){
+      list.push({ anchorDate: nextDate, staffId, arrival: sh.arrival, departure: sh.departure, upcoming:true });
     }
   });
   return list;
@@ -562,10 +576,10 @@ function classify(shift, status, now){
 
 const GROUP_META = {
   1:{cls:"g1", label:"🔴 まもなく出勤・退勤（要確認）"},
-  2:{cls:"g2", label:"🟠 退勤時刻を過ぎても未確認"},
-  3:{cls:"g3", label:"⚪ 出勤までまだ時間がある"},
+  2:{cls:"g2", label:"🟠 退勤時刻を1時間以上過ぎても未検査"},
+  3:{cls:"g3", label:"⚪ 出勤まで1時間がある"},
   4:{cls:"g4", label:"🔵 勤務中"},
-  5:{cls:"g5", label:"⚫ 完了（退勤後1時間以上）"},
+  5:{cls:"g5", label:"⚫ 2回検査完了（退勤後1時間以上）"},
 };
 
 /* ---------- master render ---------- */
@@ -613,7 +627,7 @@ function renderAll(){
     sectionsEl.appendChild(section);
   });
 
-  summaryEl.textContent = `対象: ${shifts.length}名　両方済: ${doneFull}名　出勤のみ: ${doneHalf}名　未: ${shifts.length-doneFull-doneHalf}名`;
+  summaryEl.textContent = `対象: ${shifts.length}名　両方済: ${doneFull}名　1回検査のみ: ${doneHalf}名　未: ${shifts.length-doneFull-doneHalf}名`;
 }
 
 function buildTile(item, g){
@@ -632,7 +646,8 @@ function buildTile(item, g){
       <div class="plan">${planTxt}</div>
       <div class="times">${st.arrival ? "入 "+st.arrival.split(" ")[1].slice(0,5) : ""}${st.departure ? "  出 "+st.departure.split(" ")[1].slice(0,5) : ""}</div>
     </div>
-    ${shift.inherited ? `<span class="inherit">前日出勤</span>` : ""}`;
+    ${shift.inherited ? `<span class="inherit">前日出勤</span>` : ""}
+    ${shift.upcoming ? `<span class="inherit">翌日出勤予定</span>` : ""}`;
   tile.onclick = ()=> handleTileClick(shift, person.name, st);
   return tile;
 }
@@ -809,8 +824,8 @@ document.getElementById("saveScheduleBtn").onclick = async ()=>{
   const newShiftsForDate = {};
   document.querySelectorAll("#scheduleList .skchk:checked").forEach(chk=>{
     const id = chk.dataset.id;
-    const arr = document.querySelector(`#scheduleList .skarr[data-id="${id}"]`).value || "09:00";
-    const dep = document.querySelector(`#scheduleList .skdep[data-id="${id}"]`).value || "18:00";
+    const arr = normalizeTimeStr(document.querySelector(`#scheduleList .skarr[data-id="${id}"]`).value || "09:00");
+    const dep = normalizeTimeStr(document.querySelector(`#scheduleList .skdep[data-id="${id}"]`).value || "18:00");
     newShiftsForDate[id] = { arrival: arr, departure: dep };
   });
   appData.shifts[dateVal] = newShiftsForDate;
@@ -821,8 +836,8 @@ document.getElementById("saveScheduleBtn").onclick = async ()=>{
 
 /* ---------- log / export ---------- */
 function actionLabel(a){
-  if(a==="arrival") return `<span class="tag arrival">出勤チェック</span>`;
-  if(a==="departure") return `<span class="tag departure">退勤チェック</span>`;
+  if(a==="arrival") return `<span class="tag arrival">出勤前チェック</span>`;
+  if(a==="departure") return `<span class="tag departure">退勤後チェック</span>`;
   return `<span class="tag reset">リセット</span>`;
 }
 function renderLogTable(){
@@ -841,7 +856,7 @@ document.getElementById("exportCsvBtn").onclick = ()=>{
   const rows = renderLogTable();
   const header = "日付,氏名,区分,時刻\n";
   const body = rows.map(r=>{
-    const actionJp = r.action==="arrival"?"出勤チェック":r.action==="departure"?"退勤チェック":"リセット";
+    const actionJp = r.action==="arrival"?"出勤前チェック":r.action==="departure"?"退勤後チェック":"リセット";
     return `${r.date},${r.name},${actionJp},${r.timestamp.split(" ")[1]}`;
   }).join("\n");
   const csv = "\uFEFF" + header + body;
