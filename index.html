@@ -36,6 +36,11 @@
   .datetab.active{border-color:var(--checked);background:var(--checked-pale);}
   .datetab.active .label{color:var(--checked);}
 
+  .sizebar{display:flex;justify-content:flex-end;align-items:center;gap:6px;padding:6px 16px 0;}
+  .sizebar .sizelabel{font-size:11px;color:var(--text-dim);margin-right:2px;}
+  .sizebtn{font-size:12px;padding:5px 12px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--text-dim);cursor:pointer;font-weight:700;}
+  .sizebtn.active{background:var(--checked-pale);color:var(--checked);border-color:var(--checked);}
+
   .summary{padding:8px 16px 0;font-size:13px;color:var(--text-dim);display:flex;justify-content:space-between;align-items:center;}
   .refreshbtn{font-size:12px;color:var(--checked);cursor:pointer;font-weight:600;}
 
@@ -49,12 +54,12 @@
   .section-head.g5{background:var(--done-pale);color:var(--text-dim);}
 
   .grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(150px,1fr));gap:12px;padding-bottom:8px;}
-  
+
 .self-tile{
   border:2px dashed #888;
   background:#fff;
   cursor:pointer;
-  min-height:96px;
+  min-height:var(--self-min-h, 96px);
   display:flex;
   align-items:center;
   justify-content:center;
@@ -74,20 +79,20 @@
   border-color:#70a870;
 }
 .self-tile .self-inner{padding:12px;width:100%;}
-.self-tile .self-title{font-size:20px;font-weight:700;}
-.self-tile .self-number{font-size:24px;font-weight:800;margin:4px 0;}
-.self-tile .self-status{font-size:14px;font-weight:700;}
-.self-tile .self-plan{font-size:12px;color:#666;margin-top:5px;}
+.self-tile .self-title{font-size:var(--self-title, 20px);font-weight:700;}
+.self-tile .self-number{font-size:var(--self-number, 24px);font-weight:800;margin:4px 0;}
+.self-tile .self-status{font-size:var(--self-status, 14px);font-weight:700;}
+.self-tile .self-plan{font-size:var(--self-plan, 12px);color:#666;margin-top:5px;}
 
-.tile{position:relative;height:92px;border-radius:14px;overflow:hidden;border:2px solid var(--line);cursor:pointer;background:#fff;}
+.tile{position:relative;height:var(--tile-h, 92px);border-radius:14px;overflow:hidden;border:2px solid var(--line);cursor:pointer;background:#fff;}
   .tile .half{position:absolute;top:0;bottom:0;width:50%;background:#fff;transition:background .15s ease;}
   .tile .half.left{left:0;border-right:1px solid rgba(0,0,0,.04);}
   .tile .half.right{right:0;}
   .tile .half.on{background:var(--checked-pale);}
   .tile .content{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px;pointer-events:none;}
-  .tile .name{font-size:16px;font-weight:700;line-height:1.25;text-align:center;}
-  .tile .plan{font-size:10.5px;color:var(--text-dim);margin-top:3px;}
-  .tile .times{font-size:11px;color:var(--checked);margin-top:2px;font-weight:600;letter-spacing:.02em;}
+  .tile .name{font-size:var(--f-name, 16px);font-weight:700;line-height:1.25;text-align:center;}
+  .tile .plan{font-size:var(--f-plan, 10.5px);color:var(--text-dim);margin-top:3px;}
+  .tile .times{font-size:var(--f-times, 11px);color:var(--checked);margin-top:2px;font-weight:600;letter-spacing:.02em;}
   .tile.full{border-color:var(--checked);}
   .tile.g1{border-color:var(--danger);}
   .tile.g2{border-color:var(--warn);}
@@ -142,9 +147,13 @@
   .note{font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:14px;}
 
   #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:100;display:none;}
+
+  body.size-small{ --tile-h:92px; --f-name:16px; --f-plan:10.5px; --f-times:11px; --self-title:20px; --self-number:24px; --self-status:14px; --self-plan:12px; --self-min-h:96px; }
+  body.size-medium{ --tile-h:110px; --f-name:19px; --f-plan:12.5px; --f-times:13px; --self-title:23px; --self-number:27px; --self-status:15.5px; --self-plan:13px; --self-min-h:112px; }
+  body.size-large{ --tile-h:128px; --f-name:22px; --f-plan:14.5px; --f-times:15px; --self-title:26px; --self-number:30px; --self-status:17px; --self-plan:14.5px; --self-min-h:130px; }
 </style>
 </head>
-<body>
+<body class="size-small">
 
 <header>
   <div>
@@ -165,6 +174,12 @@
 
 <div id="appRoot">
   <div class="datebar" id="dateBar"></div>
+  <div class="sizebar" id="sizeBar">
+    <span class="sizelabel">表示サイズ</span>
+    <button class="sizebtn" data-size="small">小</button>
+    <button class="sizebtn" data-size="medium">中</button>
+    <button class="sizebtn" data-size="large">大</button>
+  </div>
   <div class="summary">
     <span id="summary"></span>
     <span class="refreshbtn" id="manualRefresh">↻ 更新</span>
@@ -260,6 +275,8 @@ let appData = { staff: [], shifts: {}, status: {}, log: [], selfChecks: {} };
 let currentDate = fmtDate(new Date());
 let refreshTimer = null, reclassifyTimer = null, rolloverTimer = null;
 let dirtyModal = false;
+let sizeState = "small";
+let resizeTimer = null;
 
 /* ---------- date/time helpers ---------- */
 function fmtDate(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; }
@@ -287,6 +304,43 @@ function toast(msg){
   const t=document.getElementById("toast");
   t.textContent=msg; t.style.display="block";
   clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none", 2500);
+}
+
+/* ---------- display size (小/中/大) ---------- */
+function initSizeButtons(){
+  document.querySelectorAll(".sizebtn").forEach(btn=>{
+    btn.onclick = ()=>{
+      sizeState = btn.dataset.size;
+      document.body.classList.remove("size-small","size-medium","size-large");
+      document.body.classList.add("size-"+sizeState);
+      updateSizeButtonsUI();
+      renderAll();
+    };
+  });
+  updateSizeButtonsUI();
+}
+function updateSizeButtonsUI(){
+  document.querySelectorAll(".sizebtn").forEach(btn=>{
+    btn.classList.toggle("active", btn.dataset.size===sizeState);
+  });
+}
+initSizeButtons();
+window.addEventListener("resize", ()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(renderAll, 200);
+});
+
+/* Given a grid element already in the DOM, work out how many columns it would
+   have at the "小" size (minmax 150px), then subtract 1 for 中 / 2 for 大,
+   and force that exact column count so the tiles get wider (and, via the
+   size-* CSS vars on body, taller with bigger text) as the size increases. */
+function applySizeToGrid(gridEl){
+  const width = gridEl.clientWidth;
+  const gap = 12, minW = 150;
+  const colsSmall = Math.max(1, Math.floor((width + gap) / (minW + gap)));
+  const delta = { small:0, medium:1, large:2 }[sizeState] || 0;
+  const cols = Math.max(1, colsSmall - delta);
+  gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
 
 /* ---------- Google Sign-in ---------- */
@@ -660,6 +714,7 @@ function renderAll(){
 
       section.appendChild(grid);
       sectionsEl.appendChild(section);
+      applySizeToGrid(grid);
       return;
     }
 
@@ -679,6 +734,7 @@ function renderAll(){
 
       section.appendChild(grid);
       sectionsEl.appendChild(section);
+      applySizeToGrid(grid);
       return;
     }
 
@@ -692,6 +748,7 @@ function renderAll(){
     groups[g].forEach(item=> grid.appendChild(buildTile(item, g)));
     section.appendChild(grid);
     sectionsEl.appendChild(section);
+    applySizeToGrid(grid);
   });
 
   const selfAll = getSelfChecks(currentDate);
