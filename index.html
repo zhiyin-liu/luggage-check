@@ -49,7 +49,37 @@
   .section-head.g5{background:var(--done-pale);color:var(--text-dim);}
 
   .grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(150px,1fr));gap:12px;padding-bottom:8px;}
-  .tile{position:relative;height:92px;border-radius:14px;overflow:hidden;border:2px solid var(--line);cursor:pointer;background:#fff;}
+  
+.self-tile{
+  border:2px dashed #888;
+  background:#fff;
+  cursor:pointer;
+  min-height:96px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  position:relative;
+}
+.self-tile.add-box{
+  background:#f7f7f7;
+  border-color:#999;
+}
+.self-tile.pending{
+  background:#fff4e6;
+  border-color:#f0a040;
+}
+.self-tile.completed{
+  background:#eef7ee;
+  border-color:#70a870;
+}
+.self-tile .self-inner{padding:12px;width:100%;}
+.self-tile .self-title{font-size:20px;font-weight:700;}
+.self-tile .self-number{font-size:24px;font-weight:800;margin:4px 0;}
+.self-tile .self-status{font-size:14px;font-weight:700;}
+.self-tile .self-plan{font-size:12px;color:#666;margin-top:5px;}
+
+.tile{position:relative;height:92px;border-radius:14px;overflow:hidden;border:2px solid var(--line);cursor:pointer;background:#fff;}
   .tile .half{position:absolute;top:0;bottom:0;width:50%;background:#fff;transition:background .15s ease;}
   .tile .half.left{left:0;border-right:1px solid rgba(0,0,0,.04);}
   .tile .half.right{right:0;}
@@ -226,7 +256,7 @@ let fileId = null;
 let tokenClient = null;
 // appData.shifts[date][staffId] = {arrival:"08:00", departure:"17:00"}
 // appData.status[date][staffId] = {arrival: fullTimestamp|null, departure: fullTimestamp|null}   (date = shift's anchor/arrival date)
-let appData = { staff: [], shifts: {}, status: {}, log: [] };
+let appData = { staff: [], shifts: {}, status: {}, log: [], selfChecks: {} };
 let currentDate = fmtDate(new Date());
 let refreshTimer = null, reclassifyTimer = null, rolloverTimer = null;
 let dirtyModal = false;
@@ -375,7 +405,7 @@ async function ensureFile(){
   const today = fmtDate(new Date());
   const shiftsToday = {};
   seedStaff.forEach(s=> shiftsToday[s.id] = {arrival:"09:00", departure:"18:00"});
-  const initial = { staff: seedStaff, shifts:{ [today]: shiftsToday }, status:{}, log:[], sheetIds:{} };
+  const initial = { staff: seedStaff, shifts:{ [today]: shiftsToday }, status:{}, log:[], selfChecks:{}, sheetIds:{} };
   const metadata = { name: FILE_NAME, parents:["appDataFolder"], mimeType:"application/json" };
   const form = new FormData();
   form.append("metadata", new Blob([JSON.stringify(metadata)], {type:"application/json"}));
@@ -393,6 +423,7 @@ async function loadFromDrive(){
   if(!appData.shifts) appData.shifts={};
   if(!appData.status) appData.status={};
   if(!appData.log) appData.log=[];
+  if(!appData.selfChecks) appData.selfChecks={};
   if(!appData.sheetIds) appData.sheetIds={};
 }
 
@@ -589,12 +620,6 @@ function renderAll(){
   const summaryEl = document.getElementById("summary");
   sectionsEl.innerHTML = "";
 
-  if(shifts.length === 0){
-    sectionsEl.innerHTML = `<div class="empty-msg">この日の出勤予定は登録されていません。<br>「⚙ 管理設定 → 出勤予定」で登録してください。</div>`;
-    summaryEl.textContent = "";
-    return;
-  }
-
   const now = new Date();
   const groups = {1:[],2:[],3:[],4:[],5:[]};
   let doneFull=0, doneHalf=0;
@@ -611,23 +636,182 @@ function renderAll(){
     groups[g].push({ shift, person, st, arrivalDT, departureDT });
   });
 
+  // 既存の予定者グループを先に描画
   [1,2,3,4,5].forEach(g=>{
-    if(groups[g].length === 0) return;
+    // 一時登録者は後ほどグループ1/5へ追加する
+    if(groups[g].length === 0 && g !== 1 && g !== 5) return;
     groups[g].sort((a,b)=> a.arrivalDT - b.arrivalDT);
+
+    // グループ1は、予定者がいなくても「追加」ボックスを必ず表示
+    if(g===1){
+      const section = document.createElement("div");
+      section.className = "section";
+      const tempList = getSelfChecks(currentDate);
+      const incompleteTemp = tempList.filter(x => !x.departure);
+      section.innerHTML = `<div class="section-head ${GROUP_META[g].cls}">${GROUP_META[g].label} <span class="cnt">(${groups[g].length + incompleteTemp.length + 1})</span></div>`;
+      const grid = document.createElement("div");
+      grid.className = "grid";
+
+      groups[g].forEach(item=> grid.appendChild(buildTile(item, g)));
+      incompleteTemp.forEach(item=> grid.appendChild(buildSelfTile(item, false)));
+
+      // 常に最後に追加用ボックス
+      grid.appendChild(buildSelfAddTile());
+
+      section.appendChild(grid);
+      sectionsEl.appendChild(section);
+      return;
+    }
+
+    // グループ5には、2回検査完了した一時登録者を最後に追加
+    if(g===5){
+      const completedTemp = getSelfChecks(currentDate).filter(x => !!x.departure);
+      if(groups[g].length === 0 && completedTemp.length === 0) return;
+
+      const section = document.createElement("div");
+      section.className = "section";
+      section.innerHTML = `<div class="section-head ${GROUP_META[g].cls}">${GROUP_META[g].label} <span class="cnt">(${groups[g].length + completedTemp.length})</span></div>`;
+      const grid = document.createElement("div");
+      grid.className = "grid";
+
+      groups[g].forEach(item=> grid.appendChild(buildTile(item, g)));
+      completedTemp.forEach(item=> grid.appendChild(buildSelfTile(item, true)));
+
+      section.appendChild(grid);
+      sectionsEl.appendChild(section);
+      return;
+    }
+
+    if(groups[g].length === 0) return;
     const meta = GROUP_META[g];
     const section = document.createElement("div");
     section.className = "section";
     section.innerHTML = `<div class="section-head ${meta.cls}">${meta.label} <span class="cnt">(${groups[g].length})</span></div>`;
     const grid = document.createElement("div");
     grid.className = "grid";
-    groups[g].forEach(item=>{
-      grid.appendChild(buildTile(item, g));
-    });
+    groups[g].forEach(item=> grid.appendChild(buildTile(item, g)));
     section.appendChild(grid);
     sectionsEl.appendChild(section);
   });
 
-  summaryEl.textContent = `対象: ${shifts.length}名　両方済: ${doneFull}名　1回検査のみ: ${doneHalf}名　未: ${shifts.length-doneFull-doneHalf}名`;
+  const selfAll = getSelfChecks(currentDate);
+  const selfFull = selfAll.filter(x => !!x.departure).length;
+  const selfHalf = selfAll.length - selfFull;
+  summaryEl.textContent =
+    `対象: ${shifts.length}名　両方済: ${doneFull + selfFull}名　1回検査のみ: ${doneHalf + selfHalf}名　未: ${Math.max(0, shifts.length-doneFull-doneHalf) + 0}名`;
+}
+
+function getSelfChecks(date){
+  if(!appData.selfChecks) appData.selfChecks = {};
+  if(!Array.isArray(appData.selfChecks[date])) appData.selfChecks[date] = [];
+  return appData.selfChecks[date];
+}
+
+function buildSelfAddTile(){
+  const tile = document.createElement("div");
+  tile.className = "self-tile add-box";
+  tile.innerHTML = `
+    <div class="self-inner">
+      <div class="self-title">＋ 追加</div>
+      <div class="self-status">予定なしの臨時スタッフを登録</div>
+      <div class="self-plan">クリックして社員番号を入力</div>
+    </div>`;
+  tile.onclick = ()=> handleSelfAddClick();
+  return tile;
+}
+
+function buildSelfTile(item, completed){
+  const tile = document.createElement("div");
+  tile.className = "self-tile " + (completed ? "completed" : "pending");
+
+  const arrivalText = item.arrival ? item.arrival.split(" ")[1] : "";
+  const departureText = item.departure ? item.departure.split(" ")[1] : "";
+
+  tile.innerHTML = `
+    <div class="self-inner">
+      <div class="self-number">${escapeHtml(item.employeeNumber)}</div>
+      <div class="self-status">${completed ? "2回検査完了" : "検査記録完了"}</div>
+      <div class="self-plan">${arrivalText ? "1回目 " + arrivalText : ""}${departureText ? "　2回目 " + departureText : ""}</div>
+    </div>`;
+
+  if(!completed){
+    tile.onclick = ()=> handleSelfTileClick(item);
+  }
+  return tile;
+}
+
+function escapeHtml(value){
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[ch]));
+}
+
+async function handleSelfAddClick(){
+  const employeeNumber = prompt("社員番号を入力してください");
+  if(employeeNumber === null) return;
+
+  const no = employeeNumber.trim();
+  if(!no){
+    toast("社員番号を入力してください");
+    return;
+  }
+
+  const list = getSelfChecks(currentDate);
+  const duplicated = list.some(x => String(x.employeeNumber).trim() === no && !x.departure);
+  if(duplicated){
+    toast("この社員番号は、すでに1回目の検査が記録されています");
+    return;
+  }
+
+  const ts = nowFull();
+  const item = {
+    employeeNumber: no,
+    arrival: ts,
+    departure: null
+  };
+  list.push(item);
+
+  // 社員番号をそのまま「社員名」として既存打刻ログへ保存
+  const entry = {
+    date: currentDate,
+    staffId: no,
+    name: no,
+    action: "arrival",
+    timestamp: ts
+  };
+  appData.log.push(entry);
+
+  renderAll();
+  toast("検査記録完了");
+  await saveToDrive();
+  appendLogRowToSheet(entry);
+  renderAll();
+}
+
+async function handleSelfTileClick(item){
+  if(item.departure){
+    toast("2回検査完了");
+    return;
+  }
+
+  const ts = nowFull();
+  item.departure = ts;
+
+  // 社員番号をそのまま「社員名」として既存打刻ログへ保存
+  const entry = {
+    date: currentDate,
+    staffId: item.employeeNumber,
+    name: item.employeeNumber,
+    action: "departure",
+    timestamp: ts
+  };
+  appData.log.push(entry);
+
+  renderAll();
+  toast("2回目の検査を記録しました");
+  await saveToDrive();
+  appendLogRowToSheet(entry);
+  renderAll();
 }
 
 function buildTile(item, g){
