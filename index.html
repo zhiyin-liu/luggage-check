@@ -417,7 +417,7 @@ function checkDateRollover(){
 }
 
 async function autoRefresh(){
-  if(dirtyModal) return;
+  if(dirtyModal || pendingSaveCount>0) return;
   try{
     await loadFromDrive();
     renderDateBar();
@@ -470,22 +470,98 @@ async function ensureFile(){
   appData = initial;
 }
 
+/* ---------- safe merge helpers ----------
+   Both loadFromDrive() (periodic auto-refresh) and saveToDrive() used to do a
+   blind/shallow overwrite of the whole appData object. If a tile was tapped
+   right before the 20-second auto-refresh finished its GET request, the
+   refresh would land afterwards and stomp the just-recorded check-in with
+   older data from Drive, making the blue half disappear a few seconds later.
+   These helpers merge field-by-field instead, so a locally-recorded
+   arrival/departure is never lost, while still picking up genuinely new
+   data written by other devices (another tablet / the admin PC). */
+/* status is derived from the merged log rather than merged field-by-field.
+   Merging raw {arrival,departure} values with "local || remote" would bring
+   a reset entry back from the roomate remote copy (a reset just deletes the
+   local status key, and a plain OR-merge can't tell "reset to null" apart
+   from "never checked in"). Replaying the deduplicated, timestamp-sorted log
+   instead handles arrival/departure/reset correctly and is naturally
+   order-independent, since the log itself is merged by a stable dedupe key. */
+function deriveStatusFromLog(mergedLog){
+  const status = {};
+  mergedLog
+    .slice()
+    .sort((a,b)=> a.timestamp.localeCompare(b.timestamp))
+    .forEach(e=>{
+      if(e.action !== "arrival" && e.action !== "departure" && e.action !== "reset") return;
+      if(!status[e.date]) status[e.date] = {};
+      if(e.action === "reset"){ status[e.date][e.staffId] = {arrival:null, departure:null}; return; }
+      if(!status[e.date][e.staffId]) status[e.date][e.staffId] = {arrival:null, departure:null};
+      status[e.date][e.staffId][e.action] = e.timestamp;
+    });
+  return status;
+}
+function mergeSelfChecks(remote, local){
+  const result = {};
+  const dates = new Set([...Object.keys(remote||{}), ...Object.keys(local||{})]);
+  dates.forEach(date=>{
+    const r = (remote && remote[date]) || [];
+    const l = (local && local[date]) || [];
+    const merged = r.map(item=>Object.assign({}, item));
+    l.forEach(localItem=>{
+      const idx = merged.findIndex(m => m.employeeNumber===localItem.employeeNumber && m.arrival===localItem.arrival);
+      if(idx === -1){ merged.push(Object.assign({}, localItem)); }
+      else{ merged[idx].departure = localItem.departure || merged[idx].departure || null; }
+    });
+    result[date] = merged;
+  });
+  return result;
+}
+function mergeLog(remote, local){
+  const key = e => `${e.date}|${e.staffId}|${e.action}|${e.timestamp}`;
+  const map = new Map();
+  (remote||[]).forEach(e=> map.set(key(e), e));
+  (local||[]).forEach(e=> map.set(key(e), e));
+  return Array.from(map.values());
+}
+function mergeStaff(remote, local){
+  const byId = new Map();
+  (remote||[]).forEach(s=> byId.set(s.id, s));
+  (local||[]).forEach(s=> byId.set(s.id, s)); // local edits (rename/add) win
+  return Array.from(byId.values());
+}
+function mergeAppData(remote, local){
+  const log = mergeLog(remote.log, local.log);
+  return {
+    staff: mergeStaff(remote.staff, local.staff),
+    shifts: Object.assign({}, remote.shifts, local.shifts),
+    status: deriveStatusFromLog(log),
+    log,
+    selfChecks: mergeSelfChecks(remote.selfChecks, local.selfChecks),
+    sheetIds: Object.assign({}, remote.sheetIds, local.sheetIds)
+  };
+}
+
+let pendingSaveCount = 0;
+
 async function loadFromDrive(){
   const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
-  appData = await res.json();
-  if(!appData.staff) appData.staff=[];
-  if(!appData.shifts) appData.shifts={};
-  if(!appData.status) appData.status={};
-  if(!appData.log) appData.log=[];
-  if(!appData.selfChecks) appData.selfChecks={};
-  if(!appData.sheetIds) appData.sheetIds={};
+  const remote = await res.json();
+  const local = appData || {};
+  appData = mergeAppData(
+    { staff:remote.staff||[], shifts:remote.shifts||{}, status:remote.status||{}, log:remote.log||[], selfChecks:remote.selfChecks||{}, sheetIds:remote.sheetIds||{} },
+    { staff:local.staff||[], shifts:local.shifts||{}, status:local.status||{}, log:local.log||[], selfChecks:local.selfChecks||{}, sheetIds:local.sheetIds||{} }
+  );
 }
 
 async function saveToDrive(){
+  pendingSaveCount++;
   try{
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
     const latest = await res.json();
-    appData = Object.assign({}, latest, appData);
+    appData = mergeAppData(
+      { staff:latest.staff||[], shifts:latest.shifts||{}, status:latest.status||{}, log:latest.log||[], selfChecks:latest.selfChecks||{}, sheetIds:latest.sheetIds||{} },
+      appData
+    );
     await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
       method:"PATCH", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(appData)
     });
@@ -493,6 +569,8 @@ async function saveToDrive(){
   }catch(e){
     console.error(e);
     toast("保存に失敗しました。通信状態をご確認ください。");
+  }finally{
+    pendingSaveCount--;
   }
 }
 
