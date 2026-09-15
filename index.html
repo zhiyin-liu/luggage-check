@@ -278,6 +278,19 @@ let dirtyModal = false;
 let sizeState = "small";
 let resizeTimer = null;
 
+/* ---------- 5分钟内的重复点击去抖 ----------
+   同一个人（同一天、同一 staffId，或同一临时社員番号）在 5 分钟内
+   只允许成功记录一次。冷却时间内的再次点击直接静默忽略：
+   不写入第二条记录，也不弹出任何提示或报错。 */
+const CLICK_COOLDOWN_MS = 5 * 60 * 1000;
+const lastActionAt = new Map(); // key -> ms epoch of last successful record
+function isCoolingDown(key){
+  const last = lastActionAt.get(key);
+  return last !== undefined && (Date.now() - last) < CLICK_COOLDOWN_MS;
+}
+function markAction(key){ lastActionAt.set(key, Date.now()); }
+function clearCooldown(key){ lastActionAt.delete(key); }
+
 /* ---------- date/time helpers ---------- */
 function fmtDate(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; }
 function addDays(d,n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
@@ -886,17 +899,16 @@ async function handleSelfAddClick(){
   if(employeeNumber === null) return;
 
   const no = employeeNumber.trim();
-  if(!no){
-    toast("社員番号を入力してください");
-    return;
-  }
+  if(!no) return;
+
+  const key = "temp|" + no;
+  if(isCoolingDown(key)) return; // 5分钟内の重複タップは記録せず、何も表示しない
 
   const list = getSelfChecks(currentDate);
   const duplicated = list.some(x => String(x.employeeNumber).trim() === no && !x.departure);
-  if(duplicated){
-    toast("この社員番号は、すでに1回目の検査が記録されています");
-    return;
-  }
+  if(duplicated) return; // すでに1回目が記録済み。エラー表示はせず静かに無視する
+
+  markAction(key);
 
   const ts = nowFull();
   const item = {
@@ -924,10 +936,11 @@ async function handleSelfAddClick(){
 }
 
 async function handleSelfTileClick(item){
-  if(item.departure){
-    toast("2回検査完了");
-    return;
-  }
+  if(item.departure) return; // 記録済み。エラー表示はせず何もしない
+
+  const key = "temp|" + item.employeeNumber;
+  if(isCoolingDown(key)) return; // 5分钟内の重複タップは記録せず、何も表示しない
+  markAction(key);
 
   const ts = nowFull();
   item.departure = ts;
@@ -973,8 +986,17 @@ function buildTile(item, g){
 
 /* ---------- click logic (status keyed by shift.anchorDate, NOT the visible tab date) ---------- */
 async function handleTileClick(shift, name, st){
-  if(!st.arrival){ await setStatus(shift, "arrival"); }
-  else if(!st.departure){ await setStatus(shift, "departure"); }
+  const key = shift.anchorDate + "|" + shift.staffId;
+  if(!st.arrival){
+    if(isCoolingDown(key)) return; // 5分钟内の重複タップは記録せず、何も表示しない
+    markAction(key);
+    await setStatus(shift, "arrival");
+  }
+  else if(!st.departure){
+    if(isCoolingDown(key)) return;
+    markAction(key);
+    await setStatus(shift, "departure");
+  }
   else { openDetail(shift, name, st); }
 }
 
@@ -1005,6 +1027,7 @@ function openDetail(shift, name, st){
   document.getElementById("resetBtn").onclick = async ()=>{
     if(confirm(`${name} さんの ${shift.anchorDate} の記録をリセットしますか？`)){
       delete appData.status[shift.anchorDate][shift.staffId];
+      clearCooldown(shift.anchorDate + "|" + shift.staffId);
       const entry = {date:shift.anchorDate, staffId:shift.staffId, name, action:"reset", timestamp: nowFull()};
       appData.log.push(entry);
       closeOverlay("detailOverlay");
